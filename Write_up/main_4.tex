@@ -49,7 +49,7 @@
 
 \renewcommand{\abstractnamefont}{\normalsize\bfseries}
 \renewcommand{\abstracttextfont}{\normalsize}
-\renewcommand{\abstractname}{Abstract\par\vspace{6pt}}
+\renewcommand{\abstractname}{Abstract\par\vspace{3}}
 \setlength{\absleftindent}{0pt}
 \setlength{\absrightindent}{0pt}
 
@@ -83,7 +83,6 @@
 \hyphenation{retrieval}
 
 \begin{document}
-
 \twocolumn[{%
 \begin{center}
   {\Large\bfseries Retrieval-Augmented Reformulation\\[4pt]
@@ -94,82 +93,94 @@
 \end{center}
 \vspace{6pt}
 \hrule height 0.5pt
-\vspace{6pt}
-\begin{abstract}
-\setstretch{1.03}
-Automatic speech recognition (ASR) transcripts often contain lexical and
-semantic errors that degrade downstream usability. Retrieval-augmented
-generation (RAG) has been proposed as a post-processing approach that
-grounds a language model in external passages to improve transcript quality.
-This work evaluates lexical and dense RAG reformulation pipelines for ASR
-correction across three datasets: TED-LIUM, MTS-Dialog, and PriMock57
-clinical consultations. Experiments compare generic and domain-matched
-retrieval using BM25 and dense embeddings with a Mistral-7B generator in a
-$2{\times}3$ design over retrieval modality and corpus scope.
-Results show that dense retrieval substantially improves WER on clean
-TED-LIUM transcripts, reducing WER by up to 54\% relative to an LLM-only
-baseline, while generic lexical RAG can degrade performance. On clinical
-data, however, domain-matched retrieval frequently degrades biomedical
-entity fidelity (DISEASE~F1, $p < 0.01$) even when semantic metrics such as
-BERTScore remain stable. These findings highlight a \textbf{clinical corpus
-penalty}: retrieval grounding can introduce plausible but incorrect domain
-entities, suggesting that entity-aware retrieval or stronger constraints are
-required for safe clinical deployment.
-\end{abstract}
+\vspace{2mm}
+\begin{center}
+\noindent\textbf{Abstract}\\[4pt]
+\end{center}
+
+\noindent This paper evaluates retrieval-augmented generation (RAG) as a post-correction 
+mechanism for ASR transcripts across three datasets, two retrieval modalities 
+(BM25 vs dense embeddings), and three corpus domains. The central finding is a 
+\emph{clinical corpus penalty}: domain-matched clinical retrieval significantly 
+degrades biomedical entity fidelity (DISEASE F1, $p < 0.01$) while BERTScore 
+remains unchanged, exposing standard semantic metrics as insufficient for 
+clinical ASR evaluation. On clean speech, domain-matched dense RAG reduces WER 
+by 54\% relative to an LLM-only baseline; on real clinical audio (PriMock57, 
+$n$=57), it underperforms LLM-only on all four metrics ($p < 0.01$). 
+Phonetically motivated ASR errors resist text-only correction, and loosely 
+matched clinical corpora introduce incorrect entity substitutions invisible to 
+semantic metrics. These findings point toward entity-aware retrieval, 
+phonetic-based RAG, and graph-based approaches such as GraphRAG as necessary 
+directions for safe clinical deployment.
+
 \vspace{6pt}
 \hrule height 0.5pt
 \vspace{8pt}
 }]
 
 \section{Introduction}
+\label{sec:intro}
 
-ASR models such as Whisper still fail in challenging conditions: accented
-speech, background noise, and domain-specific vocabulary. In clinical settings
-the stakes are concrete: \textit{lisinopril} transcribed as \textit{listen oh
-pill} can propagate into a clinical note and affect downstream care.
+The motivation for this project came from a practical frustration with long 
+WhatsApp voice notes. Receiving a three-minute voice message to answer a yes/no 
+question is a common experience, and it raises a straightforward question: can 
+an automated system produce a concise, accurate text reformulation in the 
+sender's own style? This is the longer-term applied direction of this work: a 
+system for automatic voice message summarisation and reformulation. That vision 
+has a clear prerequisite: the transcript has to be accurate first, since 
+reformulating a noisy transcript would simply present incorrect content in 
+fluent prose. This project therefore focuses on the correction step.
 
-LLM-based post-correction is one remedy, but LLMs tend to paraphrase rather
-than minimally correct, which harms lexical fidelity. Retrieval-Augmented
-Generation (RAG) grounds the LLM in external passages. As this paper shows,
-retrieving from the wrong corpus introduces a worse problem: entity
-substitutions that look semantically correct but are clinically wrong, and
-invisible to BERTScore.
+\medskip
 
-This paper evaluates RAG post-correction on three datasets, two retrieval
-paradigms, and three corpus domains. The practical aim is to establish whether
-RAG post-correction is reliable enough to serve as the correction stage of a
-voice-note reformulation pipeline. Three
-research questions drive the design:
+The clinical domain raises a sharper version of the same problem. A drug name 
+like \textit{lisinopril} transcribed as \textit{listen oh pill} can propagate 
+into a clinical note and affect patient care, making entity-level fidelity a 
+safety requirement. Critically, the danger is not only that errors go 
+uncorrected: retrieval-based correction can actively introduce new errors, 
+substituting entities that appear semantically plausible but are clinically 
+wrong, in ways that standard metrics fail to detect.
 
-\begin{enumerate}[leftmargin=1.6em, itemsep=2pt, topsep=3pt]
-  \item Can RAG improve semantic quality over LLM-only rewriting?
-  \item Does domain-specific retrieval outperform generic retrieval?
-  \item How do BM25 and dense retrieval compare for ASR correction?
-\end{enumerate}
+\medskip
 
-These questions map to four testable hypotheses: (H1)~RAG improves semantic
-quality over LLM-only rewriting; (H2)~domain-specific retrieval outperforms
-generic retrieval; (H3)~dense retrieval outperforms lexical retrieval on
-identical corpora; and (H4)~RAG improves correction quality on real noisy
-clinical audio. Results for all four are summarised in \S\ref{sec:hypotheses}.
+ASR models such as Whisper still fail under challenging conditions including 
+accented speech, background noise, and domain-specific vocabulary. LLM-based 
+post-correction is one remedy, but LLMs tend to paraphrase rather than minimally 
+correct, harming lexical fidelity. RAG grounds the LLM in external passages and 
+can improve correction quality, but corpus selection matters enormously: 
+retrieving from a loosely related clinical corpus introduces medically plausible 
+terminology that the model substitutes for uncertain ASR tokens, producing 
+outputs that score well on semantic metrics while containing factually incorrect 
+clinical entities. This failure mode is the central finding of the paper.
 
-Nine conditions (C1 raw ASR, two LLM-only baselines, $2{\times}3$ RAG grid) are
-evaluated on WER, BLEU, ROUGE-L, BERTScore, and NER~F1.
+\medskip
+
+Three research questions drive the design: (1)~Can RAG improve semantic quality 
+over LLM-only rewriting? (2)~Does domain-specific retrieval outperform generic 
+retrieval? (3)~How do BM25 and dense retrieval compare for ASR correction? These 
+map to four testable hypotheses: (H1)~RAG improves semantic quality over 
+LLM-only rewriting; (H2)~domain-specific retrieval outperforms generic 
+retrieval; (H3)~dense retrieval outperforms lexical retrieval on identical 
+corpora; and (H4)~RAG improves correction quality on real noisy clinical audio. 
+Results are summarised in \S\ref{sec:hypotheses}. Nine conditions (C1 raw ASR, 
+two LLM-only baselines, $2{\times}3$ RAG grid) are evaluated on WER, BLEU, 
+ROUGE-L, BERTScore, and NER~F1.
 
 \paragraph{Contributions.}
-(1) A controlled comparison of lexical and dense RAG pipelines for ASR
-transcript reformulation in a $2{\times}3$ grid (lexical vs dense; generic vs
-domain-relevant vs domain-matched corpora) across three ASR domains: clean
-TED, simulated clinical MTS-Dialog, and real clinical PriMock57.
-(2) An analysis of how corpus scope (generic vs domain-matched) affects
-correction quality across datasets with different noise characteristics.
-(3) Evidence that domain-matched clinical retrieval can introduce incorrect
-biomedical entities while leaving semantic metrics such as BERTScore largely
-unchanged, formalised as a \emph{clinical corpus penalty}.
-(4) A qualitative error analysis that demonstrates when retrieval grounding
-improves correction and when it introduces hallucinated or amplified
-clinical entities.
+\begin{enumerate}[leftmargin=1.6em, itemsep=2pt, topsep=3pt]
+  \item A controlled comparison of lexical and dense RAG pipelines across three 
+  domains: clean TED, simulated clinical MTS-Dialog, and real clinical PriMock57.
+  \item Identification and quantification of a \emph{clinical corpus penalty}: 
+  domain-matched retrieval significantly degrades biomedical entity fidelity while 
+  BERTScore stays flat.
+  \item A contrast between simulated and real clinical noise showing why simulated 
+  noise overestimates RAG's benefit.
+  \item Evidence that safe clinical deployment requires entity-aware constraints, 
+  with entity-aware retrieval, phonetic-based RAG, and GraphRAG identified as the 
+  most promising directions for future work.
+\end{enumerate}
 
+\clearpage
 \section{Related Work}
 
 \paragraph{ASR post-processing and error correction.}
@@ -436,7 +447,7 @@ all lexical metrics, as expected for near-ideal ASR. Both LLM-only conditions
 substantially increase WER (C2b: 0.305, C2a: 0.318 vs.\ baseline 0.079) while
 BERTScore remains above 0.90, so the loss is mainly paraphrase rather than
 semantics. Statistical significance for these comparisons is reported in
-\S\ref{sec:ted-sig}.
+\S\ref{sec:ted-sig}. Generic lexical retrieval (C3-Lex-Gen, BM25 over Wikipedia) is the worst corrected condition: per-speaker WER ranges from 0.244 to 0.724, reflecting retrieval luck rather than systematic correction.
 
 \begin{table}[t]
 \centering
@@ -528,7 +539,7 @@ domain-matched corpora (C3-Lex-Rel/Mat) substantially worsen WER and NER
 despite reasonable BLEU/ROUGE-L. Dense retrieval on the same corpora (C4 rows)
 shows the same pattern: generic dense (C4-Den-Gen) is relatively safe, while
 clinical dense (C4-Den-Mat) produces extreme verbosity and WER 10.25 (marked
-$\ddagger$), a first sign of the clinical corpus penalty.
+$\ddagger$), a first sign of the clinical corpus penalty. The pattern is consistent across BM25 and dense conditions: it is corpus scope, not retrieval modality, that drives the degradation on clinical data.
 
 Table~\ref{tab:ner-by-type} and Figure~\ref{fig:mts_metrics} make this penalty
 visible at the entity level. CHEMICAL and DISEASE F1 peak for C2a and remain
@@ -810,7 +821,26 @@ PriMock57 shows the opposite: baseline WER 0.872 leaves ample headroom, but
 neither lexical nor dense RAG clearly improves on Mistral-only. The 14\%
 relative WER degradation of C4-Den-Mat vs C2b indicates that consultation-
 non-specific clinical passages can actively hurt performance when phonetic
-errors dominate and the model cannot rely on acoustic cues.
+errors dominate and the model cannot rely on acoustic cues. 
+
+The PriMock57 degradation is unlikely to be an artefact. Four considerations 
+support this. First, the error type differs structurally from MTS-Dialog: 
+MTS noise is randomly injected at the word level, leaving contextual signals 
+intact so a language model can often reconstruct the intended word from 
+surrounding context. PriMock57 errors are phonetically grounded --- Whisper 
+has already transcribed a wrong word that is acoustically plausible, and the 
+model receives only that wrong string with no acoustic signal to indicate it 
+is incorrect. Text-context reconstruction is therefore fundamentally less 
+tractable on phonetic errors than on random noise. Second, C3-Lex-Mat 
+(WER 0.997) corroborates the finding from a different retrieval path: 
+leave-one-out PriMock57 notes constitute the most tightly matched retrieval 
+corpus available, yet performance is still worse than LLM-only --- if corpus 
+mismatch alone were responsible, this condition should outperform C4-Den-Mat, 
+but it does not. Third, the mechanism is coherent: retrieved clinical passages 
+from other consultations introduce plausible-but-locally-incorrect drug names 
+and diagnoses, which the model substitutes into the transcript. Fourth, the 
+pipeline and evaluation are standard and no obvious implementation error would 
+produce this pattern consistently across all four metrics.
 
 \begin{figure*}[!htbp]
   \centering
@@ -871,9 +901,14 @@ severity (for example, ``diabetes'' $\rightarrow$ ``uncontrolled diabetes
 mellitus''), and hallucinated history. These cases show that retrieved
 passages may supply medically plausible lexical items which the LLM
 substitutes for uncertain ASR tokens -- improving surface fluency but damaging
-entity fidelity. An appendix with several annotated examples (ASR, LLM-only,
-BM25 RAG, dense RAG, gold) would further support reproducibility and reader
-inspection.
+entity fidelity. The hallucination case (Dialogue 434) is the most clinically serious failure. The patient explicitly stated no family history of major diseases, yet C4-Den-Mat inserted several sentences of fabricated neurological history, plausibly templated from a retrieved clinical note. This is not a paraphrase error --- it is factually incorrect clinical documentation introduced by retrieval. The entity-swap case (sarcoidosis for autoimmune disease) is 
+subtler but equally problematic: both are disease entities so BERTScore 
+registers little difference, but the two conditions are clinically distinct. 
+The register-shift case (hypertension for high blood pressure) illustrates 
+the opposite limitation: the substitution is clinically acceptable but 
+penalised by exact-match NER because the entity string differs. No single 
+metric captures clinical fidelity fully, which motivates entity-aware 
+evaluation as a minimum requirement for clinical ASR assessment.
 
 \begin{table*}[!t]
 \centering
@@ -917,6 +952,17 @@ Register shift & \textit{high blood pressure} & \textit{hypertension} \\
 \label{tab:error_analysis}
 \end{table*}
 
+
+
+
+
+
+
+
+
+
+
+\columnbreak
 \section{Limitations and Future Work}
 \label{sec:limits}
 
@@ -1015,7 +1061,8 @@ directions for future work. However, until these approaches are validated,
 they should currently be treated as experimental rather than reliable
 plug-and-play solutions.
 
-\clearpage
+
+\vspace{4pt}
 \section*{Bibliography}
 \addcontentsline{toc}{section}{Bibliography}
 \begin{thebibliography}{99}
