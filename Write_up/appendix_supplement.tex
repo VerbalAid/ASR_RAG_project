@@ -1,0 +1,177 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[british]{babel}
+\usepackage{newtxtext,newtxmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{setspace}
+\usepackage{parskip}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=black, citecolor=black, urlcolor=black}
+
+\begin{document}
+
+\appendix
+
+\section{Runaway / Verbosity Handling}
+\label{app:verbosity}
+
+A subset of C4-Den-Mat outputs contained repeated \texttt{TRANSCRIPT} blocks or
+very long outputs with WER $>$ 1.0 (one dialogue reached WER 10.25). These are
+treated as prompt-following failures rather than meaningful corrections.
+
+Any output that (a) contained more than one literal \texttt{TRANSCRIPT}
+marker, or (b) exceeded five times the reference word count, was flagged as a
+runaway. Flagged runs were manually checked and recorded in the file
+\texttt{c4\_den\_mat\_cleaned.json}. Metrics can therefore be reported in two
+ways:
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Full}: all runs included (no exclusions).
+  \item \textbf{Cleaned}: flagged runaways removed using the above rule.
+\end{itemize}
+Tables in the main paper use \textbf{Full} metrics unless explicitly marked as
+``Cleaned''. Appendix~\ref{app:cleaned-metrics} lists the affected dialogue
+IDs and summarises both versions side by side so that the impact of removing
+runaways is transparent.
+
+\section{Reproducibility Checklist}
+\label{app:repro}
+
+The following settings were used in all main experiments.
+
+\subsection*{ASR}
+\begin{itemize}[leftmargin=1.4em]
+  \item Whisper model: \texttt{openai/whisper-tiny}.
+  \item Decoding: beam size = 5, temperature = 0.0, no timestamps, language = en.
+  \item Audio sampling rate: dataset-provided sampling rate (as released with
+        each corpus; no resampling performed beyond the dataset defaults).
+\end{itemize}
+
+\subsection*{Retrieval Embeddings and FAISS}
+\begin{itemize}[leftmargin=1.4em]
+  \item Embedding model: \texttt{sentence-transformers/all-MiniLM-L6-v2}.
+  \item Embeddings L2-normalised before indexing.
+  \item FAISS index: \texttt{IndexFlatIP} (inner product), top-$k = 3$ passages per query.
+\end{itemize}
+
+\subsection*{BM25 Lexical Retrieval}
+\begin{itemize}[leftmargin=1.4em]
+  \item Library: \texttt{rank\_bm25}.
+  \item Parameters: $k_1 = 1.2$, $b = 0.75$.
+  \item Tokenisation: whitespace tokeniser with lowercasing and punctuation stripping.
+\end{itemize}
+
+\subsection*{Chunking}
+\begin{itemize}[leftmargin=1.4em]
+  \item Transcript chunks: 400 words with 50-word overlap (whitespace tokenisation).
+  \item PriMock57 passages (for cross-dataset retrieval): 180-word chunks with 30-word overlap.
+\end{itemize}
+
+\subsection*{LLMs and Generation}
+\begin{itemize}[leftmargin=1.4em]
+  \item Primary model: Mistral-7B via Ollama image \texttt{mistral:latest}.
+  \item Supplementary baseline: LLaMA-3 8B via Ollama (default LLaMA-3 8B image).
+  \item Mistral decoding: temperature = 0.0, top\_p = 0.95, max\_new\_tokens = 256,
+        repetition\_penalty = 1.0, stop sequence = \verb|\n\n|.
+  \item LLaMA-3 decoding: temperature = 0.0, top\_p = 0.90, max\_new\_tokens = 256,
+        repetition\_penalty = 1.0, same stop sequence.
+\end{itemize}
+
+\subsection*{Prompts}
+\begin{itemize}[leftmargin=1.4em]
+  \item Base instruction (all conditions):
+\begin{quote}\small
+\texttt{Fix only clear ASR errors in this transcript excerpt. Output ONLY the corrected text. No commentary.}
+\end{quote}
+  \item RAG conditions prepend either \texttt{REFERENCE CONTEXT} (TED) or
+        \texttt{BACKGROUND} (MTS / PriMock57) blocks as described in the main text.
+  \item Full prompt templates for each condition (C2a, C2b, C3-*, C4-*) are listed
+        in a separate prompt appendix or configuration file in the released code.
+\end{itemize}
+
+\subsection*{Randomness and Hardware}
+\begin{itemize}[leftmargin=1.4em]
+  \item Random seed: 42 for Python, NumPy, and any retrieval shuffles.
+  \item Hardware: Fedora Linux laptop with NVIDIA GeForce RTX 5060 Laptop GPU
+        (8\,GB VRAM) and an x86-64 CPU; evaluation scripts run on CPU.
+\end{itemize}
+
+\section{Annotated Examples (Template)}
+\label{app:examples}
+
+Table~\ref{tab:annotated-examples} illustrates the format used for qualitative
+examples of successful and failed corrections. In the actual appendix, each
+row should be filled with real examples drawn from MTS-Dialog and PriMock57.
+
+\begin{table*}[!t]
+\centering
+\caption{Example layout for annotated corrections. Fill with real examples:
+four successes and four failures.}
+\label{tab:annotated-examples}
+\small
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\textwidth}{cXXXXXX}
+\toprule
+\textbf{ID} & \textbf{Gold} & \textbf{ASR} & \textbf{LLM-only} &
+\textbf{BM25-RAG} & \textbf{Dense-RAG} & \textbf{Note} \\
+\midrule
+E1 & patient takes \textbf{metformin} &
+     patient takes \textbf{metaprol} &
+     patient takes metaprol &
+     patient takes \textbf{metformin} &
+     patient takes \textbf{metformin} &
+     success -- RAG corrected a phonetic error. \\
+E2 & patient has \textbf{asthma} &
+     patient has \textbf{ask ma} &
+     patient has asthma &
+     patient has sarcoidosis &
+     patient has sarcoidosis &
+     failure -- dense RAG substituted a different diagnosis. \\
+E3 & \multicolumn{6}{l}{\dots fill remaining rows with real successes / failures \dots} \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+\section{Cleaned vs Full Metrics (Skeleton)}
+\label{app:cleaned-metrics}
+
+Table~\ref{tab:full-vs-cleaned} provides a skeleton for reporting metrics with
+and without runaway outputs. Populate with real values for C4-Den-Mat on
+MTS-Dialog once computed.
+
+\begin{table}[H]
+\centering
+\caption{Skeleton for Full vs Cleaned metrics on MTS-Dialog C4-Den-Mat.
+Replace placeholders with actual means, standard deviations, and sample sizes.}
+\label{tab:full-vs-cleaned}
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lcc}
+\toprule
+ & \textbf{Full} & \textbf{Cleaned} \\
+\midrule
+WER (mean $\pm$ SD)      & \textemdash{} & \textemdash{} \\
+BLEU (mean $\pm$ SD)     & \textemdash{} & \textemdash{} \\
+ROUGE-L (mean $\pm$ SD)  & \textemdash{} & \textemdash{} \\
+BERTScore (mean $\pm$ SD)& \textemdash{} & \textemdash{} \\
+DISEASE F1 (mean $\pm$ SD) & \textemdash{} & \textemdash{} \\
+$n$ dialogues            & \textemdash{} & \textemdash{} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}
+

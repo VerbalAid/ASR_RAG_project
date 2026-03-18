@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Data / outputs (large, reproducible)
+datasets/
+results/
+
+# Local artefacts
+*.log
+*.tmp
+*.bak
+*.swp
+.DS_Store
+
+# Write-up build artefacts (keep LaTeX sources)
+Write_up/*.pdf
+Write_up/*.aux
+Write_up/*.bbl
+Write_up/*.blg
+Write_up/*.fdb_latexmk
+Write_up/*.fls
+Write_up/*.out
+Write_up/*.toc
+Write_up/*.synctex.gz
