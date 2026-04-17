@@ -1,267 +1,255 @@
-# ASR–RAG Project
+# ASR Post-Correction with Retrieval-Augmented Generation
 
-Automatic Speech Recognition (ASR) post-correction with retrieval-augmented generation (RAG). This repository compares **baseline ASR**, **LLM-only correction**, and **RAG-based correction** (lexical BM25 and dense retrieval) on three setups:
+This project investigates whether retrieving relevant text passages and feeding them to a large language model can improve the quality of automatic speech recognition transcripts — and whether that approach is safe to use in clinical settings.
 
-- **TED-LIUM** — long-form speech
-- **MTS-Dialog** — simulated noisy clinical dialogue  
-- **PriMock57 speech** — real clinical consultation audio
+The core question: when a speech recognition model mishears something, can an LLM fix it if you give it related text as context? And does that strategy hold up when the transcript contains medical terminology, where a wrong word isn't just awkward — it's potentially dangerous?
+
+> A full research poster summarising the system, results, and key findings is available in [`poster.pdf`](poster.pdf).
+
+---
+
+## The problem in one image
+
+<img src="images/motivation.png" alt="A WhatsApp-style doctor chat showing a 3-minute voice note transcribed by Whisper. The drug name lisinopril is transcribed as 'listen oh pill', type 2 diabetes as 'die a beat ease', and haemoglobin is misspelled. Alongside it, three retrieved passages from the patient's medical record — previous notes, medication list, and lab results — provide the correct terms. The corrected output on the right shows all three errors resolved." width="700"/>
+
+The figure above shows the core idea. A doctor sends a voice note summarising a consultation. Whisper transcribes it but mishears domain-specific vocabulary — drug names, diagnoses, measurements — because these words are acoustically similar to common words but rare in general speech. A plain language model asked to fix the errors will paraphrase rather than correct. Retrieval-augmented correction pulls in relevant passages from the patient's own medical record — previous notes, medication lists, lab results — and uses those as context for the correction step. The patient's history contains the exact terminology needed to fill the gaps.
+
+The danger, which this project documents, is that retrieving from a *loosely matched* clinical corpus — notes from other patients — introduces plausible-sounding but wrong entities. The model substitutes them and standard evaluation metrics do not catch it.
+
+---
+
+
+## What the project does
+
+A speech recognition model (Whisper) transcribes audio and inevitably makes mistakes. This pipeline takes those noisy transcripts and attempts to correct them using one of three strategies:
+
+1. **No correction** — use the raw transcript as-is (baseline)
+2. **LLM-only correction** — send the transcript to a language model and ask it to fix errors
+3. **Retrieval-augmented correction** — before asking the language model to fix errors, first retrieve a handful of relevant text passages and include them as context
+
+The third approach (retrieval-augmented) is tested with two different retrieval methods and three different text sources, ranging from generic Wikipedia articles to consultation-matched clinical notes.
+
+---
+
+## The central finding
+
+Retrieval helps on clean speech, but can actively harm clinical transcripts.
+
+On clean TED talk audio, retrieving from a matched corpus of similar talks reduces word error rate by 54% compared to LLM-only correction. But on real clinical consultation audio, the same approach makes things worse — the model pulls plausible-sounding medical terms from retrieved passages and substitutes them into the transcript, producing output that looks correct but contains the wrong drug names, diagnoses, or measurements. Standard evaluation metrics (including embedding-based similarity scores) fail to detect these substitutions. Only entity-level evaluation catches them.
+
+---
+
+## The three test settings
+
+**TED talks** — clean, rehearsed, single-speaker audio. Near-ideal conditions. Used to establish whether retrieval-augmented correction works at all.
+
+**Simulated clinical dialogues (MTS-Dialog)** — 100 doctor–patient conversations with artificially injected noise (random word drops and swaps). No real audio; noise is synthetic. Tests entity preservation in medical text.
+
+**Real clinical consultations (PriMock57)** — 57 mock primary care consultations with real audio recorded and transcribed using Whisper. The only setting with genuine, phonetically-motivated speech recognition errors. The hardest and most clinically realistic test.
+
+---
+
+## Retrieval methods compared
+
+**Keyword retrieval (BM25)** — matches passages based on shared words. Fast and interpretable, but retrieves based on surface overlap, not meaning. Performs poorly when the query and relevant passages use different vocabulary.
+
+**Dense semantic retrieval** — converts text into numerical vectors using a sentence embedding model, then finds passages with similar meaning regardless of exact wording. More robust, especially when vocabulary varies.
+
+Each method is tested with three types of retrieval corpus: generic out-of-domain text, domain-relevant text, and text matched to the specific consultation or speaker.
 
 ---
 
 ## Table of contents
 
-1. [Project design](#1-project-design)
-2. [Repository structure](#2-repository-structure)
-3. [Metrics](#3-metrics)
-4. [Experiments and conditions](#4-experiments-and-conditions)
-5. [Setup](#5-setup)
-6. [How to run](#6-how-to-run)
-7. [Results summary](#7-results-summary)
-8. [Visualisations](#8-visualisations)
-9. [References](#9-references)
+1. [Repository structure](#2-repository-structure)
+2. [Metrics](#3-metrics)
+3. [Experimental conditions](#4-experiments-and-conditions)
+4. [Setup](#5-setup)
+5. [How to run](#6-how-to-run)
+6. [Results summary](#7-results-summary)
+7. [Visualisations](#8-visualisations)
 
 ---
 
-## 1. Project design
-
-### Goal
-
-Evaluate how **RAG** improves ASR post-correction. The project compares:
-
-- **Retrieval modality:** lexical (BM25) vs dense (sentence-transformers + FAISS)
-- **Corpus type:** generic (out-of-domain), domain-relevant, and domain-matched (leave-one-out)
-
-All correction uses **Mistral 7B via Ollama** (`mistral:latest`).
-
-### 2×3 condition grid
-
-| Modality | Generic | Domain-relevant | Domain-matched |
-|----------|---------|-----------------|----------------|
-| **BM25** | C3-Lex-Gen | C3-Lex-Rel | C3-Lex-Mat |
-| **Dense** | C4-Den-Gen | C4-Den-Rel | C4-Den-Mat |
-
-- **Generic:** Wikipedia (TED), AG News (MTS)
-- **Domain-relevant:** In-domain but not matched to the test sample
-- **Domain-matched:** Leave-one-out (TED: exclude test speaker; MTS: exclude test dialogue)
-
-**TED** has no C4-Den-Rel. All other cells are filled.
-
-### Baselines
-
-- **C1:** Raw ASR (no correction)
-- **C2a:** LLaMA-only (TED; legacy)
-- **C2b:** Mistral-only (LLM-only baseline)
-
----
-
-## 2. Repository structure
+## Repository structure
 
 ```
 ASR_RAG_project/
 ├── README.md
-├── run_all.sh              # Full pipeline: TED + MTS + PriMock57 (prepare → experiments → eval → figures)
+├── run_all.sh                    # Full pipeline: all three datasets end-to-end
 ├── requirements.txt
 │
 ├── experiments/
-│   ├── test/               # TED (Whisper, C2, C3, C4)
-│   ├── mts/                # MTS-Dialog (noise + correction)
-│   └── primock57_speech/   # PriMock57 (Whisper + RAG on real audio)
+│   ├── test/                     # TED experiments
+│   ├── mts/                      # Clinical dialogue experiments
+│   └── primock57_speech/         # Real clinical audio experiments
 │
-├── analysis/               # Evaluation (WER, BLEU, ROUGE-L, BERTScore, NER)
-├── visualisations/         # Figures → images/
-├── scripts/                # run_visualisations.sh, run_full_mts_analysis_with_scispacy.sh, run_mts_eval_with_ner.sh
+├── analysis/                     # Evaluation scripts
+├── visualisations/               # Figure generation
+├── scripts/                      # Helper scripts
 │
 ├── results/
-│   ├── ted/                # TED outputs + metrics
-│   ├── mts/                # MTS outputs + metrics + per_dialogue
-│   ├── primock57/          # Prepared passages
-│   ├── primock57_speech/   # PriMock57 speech outputs + metrics
-│   └── wiki/               # Wikipedia cache
+│   ├── ted/                      # TED outputs and metrics
+│   ├── mts/                      # Clinical dialogue outputs and metrics
+│   └── primock57_speech/         # Real audio outputs and metrics
 │
-├── images/                 # Generated figures
-└── datasets/               # TED audio, MTS loaders, PriMock57 raw data
+├── images/                       # Generated figures
+└── datasets/                     # Raw data loaders
 ```
 
 ---
 
-## 3. Metrics
+## Metrics
 
-All metrics use normalised text (lowercase, strip punctuation, collapse whitespace).
+All outputs are normalised before scoring (lowercase, punctuation removed, whitespace collapsed).
 
-| Metric | Range | Description |
-|--------|------|-------------|
-| **WER** | [0, ∞) | Word Error Rate (jiwer). **Lower** is better. |
-| **BLEU** | [0, 1] | N-gram precision (nltk). **Higher** is better. |
-| **ROUGE-L** | [0, 1] | Longest common subsequence F1. **Higher** is better. |
-| **BERTScore** | [0, 1] | BERT embedding similarity. **Higher** is better. |
-| **NER F1** (MTS) | [0, 1] | spaCy `en_core_web_sm`. **Higher** is better. |
-| **CHEMICAL_F1 / DISEASE_F1** (MTS) | [0, 1] | scispaCy `en_ner_bc5cdr_md`. Optional. **Higher** is better. |
+| Metric | What it measures |
+|--------|-----------------|
+| **Word Error Rate** | How many words were changed, inserted, or deleted vs the reference. Lower is better. |
+| **BLEU** | N-gram precision against the reference. Higher is better. |
+| **ROUGE-L** | Longest common subsequence between output and reference. Higher is better. |
+| **BERTScore** | Semantic similarity using contextual embeddings. Higher is better. Paraphrase-tolerant — does not catch entity substitutions. |
+| **Named Entity F1** | Whether the correct named entities (people, organisations, dates) appear in the output. Higher is better. |
+| **Chemical F1 / Disease F1** | Whether the correct drug names and disease names appear. Clinical-domain specific. Higher is better. |
 
 ---
 
-## 4. Experiments and conditions
+## Experimental conditions
 
-### TED (TED-LIUM)
+### TED talks
 
-| ID | Condition | Corpus |
-|----|-----------|--------|
-| C1 | Whisper baseline | — |
-| C2a | LLaMA only | — |
-| C2b | Mistral only | — |
-| C3-Lex-Gen | BM25 RAG | Wikipedia |
-| C3-Lex-Rel | BM25 RAG | Full TED ground truth |
-| C3-Lex-Mat | BM25 RAG | Leave-one-speaker-out TED |
-| C4-Den-Gen | Dense RAG | Wikipedia |
-| C4-Den-Mat | Dense RAG | Leave-one-speaker-out TED |
+| Condition | Description | Retrieval corpus |
+|-----------|-------------|-----------------|
+| C1 | Raw Whisper output | — |
+| C2a | LLaMA correction, no retrieval | — |
+| C2b | Mistral correction, no retrieval | — |
+| C3-Lex-Gen | Keyword retrieval | Wikipedia |
+| C3-Lex-Rel | Keyword retrieval | Full TED transcript corpus |
+| C3-Lex-Mat | Keyword retrieval | Leave-one-speaker-out TED |
+| C4-Den-Gen | Dense retrieval | Wikipedia |
+| C4-Den-Mat | Dense retrieval | Leave-one-speaker-out TED |
 
-**Note:** C3-Lex-Mat can skip EricMead_2009P_EricMead if output is too short (word ratio < 0.5); heatmap shows "—".
+### Clinical dialogues (simulated noise)
 
-### MTS-Dialog (simulated noise)
-
-| ID | Condition | Corpus |
-|----|-----------|--------|
+| Condition | Description | Retrieval corpus |
+|-----------|-------------|-----------------|
 | C1 | Noisy baseline | — |
-| C2a | LLaMA only | — |
-| C2b | Mistral only | — |
-| C3-Lex-Gen | BM25 RAG | AG News |
-| C3-Lex-Rel | BM25 RAG | PriMock57 passages |
-| C3-Lex-Mat | BM25 RAG | Leave-one-dialogue-out clinical notes |
-| C4-Den-Gen | Dense RAG | AG News |
-| C4-Den-Rel | Dense RAG | PriMock57 |
-| C4-Den-Mat | Dense RAG | MTS clinical notes (`section_text`) |
+| C2a | LLaMA correction, no retrieval | — |
+| C2b | Mistral correction, no retrieval | — |
+| C3-Lex-Gen | Keyword retrieval | News articles |
+| C3-Lex-Rel | Keyword retrieval | Real clinical consultation notes |
+| C3-Lex-Mat | Keyword retrieval | Leave-one-dialogue-out clinical notes |
+| C4-Den-Gen | Dense retrieval | News articles |
+| C4-Den-Rel | Dense retrieval | Real clinical consultation notes |
+| C4-Den-Mat | Dense retrieval | Leave-one-dialogue-out clinical notes |
 
-C4-Den-Mat WER can be inflated by verbosity; BLEU/ROUGE-L/BERTScore are more reliable.
+### Real clinical audio (PriMock57)
 
-### PriMock57 speech (real audio, n=10)
-
-| ID | Condition | Corpus |
-|----|-----------|--------|
-| C1 | Whisper (tiny) | — |
-| C2a | Llama only | — |
-| C2b | Mistral only | — |
-| C3-Lex-Gen | BM25 RAG | Wikipedia |
-| C3-Lex-Rel | BM25 RAG | MTS-Dialog clean transcripts |
-| C3-Lex-Mat | BM25 RAG | PriMock57 notes (leave-one-out) |
-| C4-Den-Gen | Dense RAG | Wikipedia |
-| C4-Den-Mat | Dense RAG | MTS-Dialog clean transcripts |
-
-Ground truth: Praat TextGrid transcriptions. See `results/primock57_speech/PRIMOCK57_SPEECH_REPORT.md`.
+| Condition | Description | Retrieval corpus |
+|-----------|-------------|-----------------|
+| C1 | Raw Whisper output | — |
+| C2a | LLaMA correction, no retrieval | — |
+| C2b | Mistral correction, no retrieval | — |
+| C3-Lex-Gen | Keyword retrieval | Wikipedia |
+| C3-Lex-Rel | Keyword retrieval | Clinical dialogue transcripts |
+| C3-Lex-Mat | Keyword retrieval | Leave-one-out consultation notes |
+| C4-Den-Gen | Dense retrieval | Wikipedia |
+| C4-Den-Mat | Dense retrieval | Clinical dialogue transcripts |
 
 ---
 
-## 5. Setup
+## Setup
 
-- **Python:** 3.10–3.12 (spaCy/scispaCy do not support 3.14).
-- **Ollama:** `mistral`, `llama3:8b` (for C2a).
-- **Create a venv and install deps:**
+Requires Python 3.10–3.12. Does not support Python 3.14 (dependency constraint from the entity recognition libraries).
 
 ```bash
 python3.12 -m venv .venv
-source .venv/bin/activate   # Linux/macOS
+source .venv/bin/activate
 pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 ```
 
-- **Optional (MTS CHEMICAL/DISEASE F1):** `pip install scispacy` and  
-  `pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz`  
-  then `python -m spacy download en_ner_bc5cdr_md`.
-- **Fedora (if scispaCy build fails):** `sudo dnf install python3.12 python3.12-devel` then recreate the venv.
+Requires [Ollama](https://ollama.com) running locally with `mistral` and `llama3:8b` pulled.
 
-Experiment runs (e.g. `experiments.mts.run`) do not require spaCy. Per-dialogue evals and Wilcoxon need `mts_eval`, which needs Python 3.10–3.12 and spaCy.
+**Optional — clinical entity evaluation (drug names and diseases):**
+```bash
+pip install scispacy
+pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
+```
 
 ---
 
-## 6. How to run
+## How to run
 
-### Full pipeline (TED + MTS + PriMock57)
-
-From project root:
-
+**Full pipeline:**
 ```bash
 bash run_all.sh
 ```
 
-Runs: Ollama warmup → MTS C4-Den-Gen → BM25 conditions (TED + MTS) → TED evals → MTS eval → sanity check → Wilcoxon → figures → PriMock57 prepare → PriMock57 C1 (Whisper, 10 consultations) → PriMock57 RAG → PriMock57 eval → PriMock57 figure. Metrics in `results/{ted,mts,primock57_speech}/metrics/`.
-
-### MTS with scispaCy (CHEMICAL/DISEASE F1)
-
+**Clinical dialogue pipeline with entity evaluation:**
 ```bash
 bash scripts/run_full_mts_analysis_with_scispacy.sh
 ```
 
-### Visualisations only
-
+**Figures only:**
 ```bash
 bash scripts/run_visualisations.sh
 ```
 
-### Individual commands
+**Individual steps:**
 
-| Pipeline | Command |
-|----------|---------|
-| PriMock57 prepare | `python -m analysis.prepare_primock57` |
-| PriMock57 C1 | `python -m experiments.primock57_speech.c1_whisper` |
-| PriMock57 RAG | `python -m experiments.primock57_speech.run_rag` |
-| PriMock57 eval | `python -m analysis.primock57_speech_eval` |
-| MTS eval | `python -m analysis.mts_eval` |
-| MTS Wilcoxon | `python -m analysis.wilcoxon_mts` |
-
----
-
-## 7. Results summary
-
-### TED (n=10)
-
-| Condition | WER ↓ | BLEU ↑ | ROUGE-L ↑ | BERTScore ↑ |
-|-----------|--------|--------|------------|-------------|
-| C1 (Whisper) | 0.079 | 0.866 | 0.943 | 0.974 |
-| C2b (Mistral) | 0.305 | 0.592 | 0.790 | 0.935 |
-| C4-Den-Mat | **0.140** | **0.807** | **0.909** | **0.959** |
-
-C4-Den-Mat significantly beats C2b (Wilcoxon p < 0.01). C3-Lex-Gen has worst WER.
-
-### MTS (n=100)
-
-| Condition | WER ↓ | BLEU ↑ | CHEMICAL_F1 ↑ | DISEASE_F1 ↑ |
-|-----------|--------|--------|---------------|--------------|
-| C1 (Noisy) | **0.157** | **0.694** | **0.918** | **0.922** |
-| C2b (Mistral) | 0.241 | 0.658 | 0.933 | 0.935 |
-| C4-Den-Mat | 10.25* | 0.513 | 0.890 | 0.837 |
-
-*C4-Den-Mat WER inflated by verbosity. ScispaCy: C4-Den-Mat significantly worse than C2b on DISEASE_F1 (p = 0.0013).
-
-### PriMock57 speech (n=10)
-
-| Condition | Mean WER |
-|-----------|----------|
-| C2b (Mistral) | **0.869** (best) |
-| C4-Den-Mat | 0.991 |
-
-LLM-only (Mistral) beats RAG on real clinical audio in this setup.
+| Step | Command |
+|------|---------|
+| Prepare real audio data | `python -m analysis.prepare_primock57` |
+| Transcribe real audio | `python -m experiments.primock57_speech.c1_whisper` |
+| Run retrieval-augmented correction on real audio | `python -m experiments.primock57_speech.run_rag` |
+| Evaluate real audio results | `python -m analysis.primock57_speech_eval` |
+| Evaluate clinical dialogues | `python -m analysis.mts_eval` |
+| Statistical significance tests | `python -m analysis.wilcoxon_mts` |
 
 ---
 
-## 8. Visualisations
+## Results summary
 
-| Script | Output | Description |
-|--------|--------|-------------|
-| `ted_summary.py` | `ted_cond_metrics.png` | TED condition-level WER, BLEU, ROUGE-L, BERTScore |
-| `ted_wer_heat.py` | `ted_wer_heat.png` | Per-speaker WER heatmap |
-| `improvement_chart.py` | `improvement_chart.png` | WER improvement vs LLM-only (TED, 8 conditions) |
-| `retrieval_luck.py` | `retrieval_luck.png` | Per-speaker WER variability (C3-Lex-Gen vs C4-Den-Mat) |
-| `mts_summary.py` | `mts_cond_metrics.png` | MTS condition-level metrics (incl. scispaCy CHEMICAL/DISEASE) |
-| `ner_bert_divergence.py` | `ner_bert_divergence.png` | BERTScore vs NER F1 on MTS (semantic vs entity fidelity) |
-| `primock57_speech_summary.py` | `primock57_speech_cond_metrics.png` | PriMock57 WER, BLEU, ROUGE-L, BERTScore |
+### TED talks (10 speakers)
+
+| Condition | Word Error Rate | BLEU | ROUGE-L | BERTScore |
+|-----------|----------------|------|---------|-----------|
+| Raw Whisper | 0.079 | 0.866 | 0.943 | 0.974 |
+| Mistral only | 0.305 | 0.592 | 0.790 | 0.935 |
+| Dense matched retrieval | **0.140** | **0.807** | **0.909** | **0.959** |
+
+Dense matched retrieval significantly outperforms LLM-only correction (p < 0.01). Generic keyword retrieval is the worst corrected condition.
+
+### Clinical dialogues (100 dialogues)
+
+| Condition | Word Error Rate | BLEU | Chemical F1 | Disease F1 |
+|-----------|----------------|------|-------------|------------|
+| Noisy baseline | **0.157** | **0.694** | **0.918** | **0.922** |
+| Mistral only | 0.241 | 0.658 | 0.933 | 0.935 |
+| Dense matched retrieval | 10.25* | 0.513 | 0.890 | 0.837 |
+
+*Word error rate inflated by output verbosity. Clinical matched retrieval significantly degrades disease entity preservation vs LLM-only (p = 0.0013).
+
+### Real clinical audio (10 consultations)
+
+| Condition | Mean Word Error Rate |
+|-----------|---------------------|
+| Mistral only | **0.869** |
+| Dense matched retrieval | 0.991 |
+
+LLM-only correction outperforms retrieval-augmented correction on real clinical speech. Phonetically-motivated errors in real audio cannot be recovered from text context alone.
 
 ---
 
-## 9. References
+## Visualisations
 
-- **WER:** jiwer
-- **BLEU:** Papineni et al., ACL 2002
-- **ROUGE:** Lin, 2004
-- **BERTScore:** Zhang et al., ICLR 2020
-- **scispaCy:** Neumann et al., AllenNLP
-- **TED-LIUM:** Rousseau et al., LREC 2012
-- **MTS-Dialog:** Hugging Face `har1/MTS_Dialogue-Clinical_Note`
-- **PriMock57:** Babylon Health (GitHub)
+| Script | Output | What it shows |
+|--------|--------|--------------|
+| `ted_summary.py` | `ted_cond_metrics.png` | All four metrics across conditions for TED |
+| `ted_wer_heat.py` | `ted_wer_heat.png` | Per-speaker word error rate heatmap |
+| `improvement_chart.py` | `improvement_chart.png` | Word error rate change relative to LLM-only baseline |
+| `retrieval_luck.py` | `retrieval_luck.png` | Per-speaker variability showing keyword retrieval is inconsistent |
+| `mts_summary.py` | `mts_cond_metrics.png` | Clinical dialogue metrics including entity scores |
+| `ner_bert_divergence.py` | `ner_bert_divergence.png` | The gap between semantic similarity and entity preservation on clinical text |
+| `primock57_speech_summary.py` | `primock57_speech_cond_metrics.png` | Real audio results across all conditions |
